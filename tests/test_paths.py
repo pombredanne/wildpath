@@ -14,6 +14,9 @@ class Object(object):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+    def add(self, x, y, z=0):
+        return self.s + x + y + z
+
     def __eq__(self, other):
         return self.__class__ == other.__class__ and self.__dict__ == other.__dict__
 
@@ -30,7 +33,12 @@ class TestBase(unittest.TestCase):
             c=dict(d=4, e=5),
             d=Object(e=6),
             e=[dict(a=7, b=8),
-               dict(b=9, c=0)]
+               dict(b=9, c=0),
+               Object()],
+            f=[[dict(a=[7,7], b=[8,8]),
+                dict(b=[9,9], c=[0,0,0])],
+               [dict(a=[1,1], b=[2,2]),
+                dict(b=[3,3], c=[4,4,4])]],
         )
         self.complex = Object(
             aa=1,
@@ -39,7 +47,7 @@ class TestBase(unittest.TestCase):
             ca=dict(d=6, e=7, f=8),
             cb=Object(e=9),
             ff=[1,2,3,4,5,6],
-            gg=[dict(a=1, b=2), dict(b=3, c=4), dict(a=5, b=6, c=7)]
+            gg=[dict(a=1, b=2), dict(b=3, c=4), dict(a=5, b=6, c=7)],
         )
 
         self.agenda = agenda
@@ -131,9 +139,9 @@ class TestPath(TestBase):
         with self.assertRaises(KeyError):
             Path("e.1.a").get_in(s)
         with self.assertRaises(IndexError):
-            Path("e.2.a").get_in(s)
-        with self.assertRaises(KeyError):
-            Path("f.3").get_in(s)
+            Path("e.5.a").get_in(s)
+        with self.assertRaises(AttributeError):
+            Path("e.2.x").get_in(s)
 
 class TestWildPath(TestBase):
 
@@ -205,7 +213,7 @@ class TestWildPath(TestBase):
         p._set_in(s, 11)
         self.assertEqual(p.get_in(s), 11)
         s = deepcopy(self.simple)
-        p = WildPath("e.*.b")
+        p = WildPath("e.:2.b")
         p._set_in(s, [11, 12])
         self.assertEqual(p.get_in(s), [11,12])
 
@@ -213,15 +221,15 @@ class TestWildPath(TestBase):
         s = deepcopy(self.simple)
         p = WildPath("e.*.b")
         p._set_in(s, 13)
-        self.assertEqual(p.get_in(s), [13,13])
+        self.assertEqual(p.get_in(s), [13,13, 13])
 
         s = deepcopy(self.simple)
-        p = WildPath("e.*.*")
+        p = WildPath("e.:2.*")
         p._set_in(s, 13)
         self.assertEqual(p.get_in(s), [{'a': 13, 'b': 13}, {'c': 13, 'b': 13}])
 
         s = deepcopy(self.simple)
-        p = WildPath("e.*")
+        p = WildPath("e.:2")
         p._set_in(s, 13)
         self.assertEqual(p.get_in(s), [13, 13])
 
@@ -284,6 +292,7 @@ class TestWildPath(TestBase):
         self.assertEqual(WildPath("b*.1").get_in(s), {'ba': 3, 'bb': 5})
         self.assertEqual(WildPath("c*.e").get_in(s), {'ca': 7, 'cb': 9})
         self.assertEqual(WildPath("c*.e*").get_in(s), {'ca': {'e': 7}, 'cb': {'e': 9}})
+        self.assertEqual(set(WildPath("c*.e*").get_in(s, flat=True)), {7, 9})
 
     def test_wild_set(self):
         p1 = WildPath("bb.*")
@@ -377,9 +386,9 @@ class TestWildPath(TestBase):
         with self.assertRaises(KeyError):
             WildPath("e.1.a").get_in(s)
         with self.assertRaises(IndexError):
-            WildPath("e.2.a").get_in(s)
-        with self.assertRaises(KeyError):
-            WildPath("f.3").get_in(s)
+            WildPath("e.5.a").get_in(s)
+        with self.assertRaises(AttributeError):
+            WildPath("e.2.x").get_in(s)
 
     def test_string_like_values(self):
         items = list(WildPath.items(self.agenda))
@@ -390,12 +399,32 @@ class TestWildPath(TestBase):
         except Exception as e:
             self.fail(e)
 
+    def test_flat(self):
+        obj=deepcopy(self.simple)
+        path = WildPath("f.*.*.*.1")
+        self.assertEqual(set(path.get_in(obj, flat=True)), {7, 8, 0, 9, 1, 2, 4, 3})   #order is not preserved for dicts
+        path = WildPath("f.*.*.*")
+        self.assertTrue(all(isinstance(p, list) for p in path.get_in(obj, flat=True)))
+
+    def test_call_in(self):
+        special = Object(s=0)
+        special.sub = lambda x, y: x-y
+        obj = [
+            dict(a=Object(s=1), b=Object(s=2), c=special),
+            dict(aa=Object(s=3), bb=Object(s=4), c=special),
+        ]
+        path = WildPath("*.a*.add")
+        self.assertEqual(path.call_in(obj, 1, y=2), [{'a': 4}, {'aa': 6}])
+        path = WildPath("*.c.sub")
+        self.assertEqual(path.call_in(obj, 2, y=1), [1, 1])
+
+
 
 class TestIterators(TestBase):
 
     def test_iteritems_all(self):
         paths = [path for path in Path.items(self.simple, all=True)]
-        self.assertEqual(len(paths), 16)
+        self.assertEqual(len(paths), 50)
 
         new = {}
         for path, value in Path.items(self.simple, all=True):
@@ -407,12 +436,9 @@ class TestIterators(TestBase):
     def test_iteritems(self):
         items = [path for path in Path.items(self.simple, all=False)]
         self.assertTrue(all(isinstance(item, tuple) for item in items))
-        self.assertEqual(len(items), 10)
+        self.assertEqual(len(items), 28)
 
     def test_iteritems_copy(self):
-        paths = [path for path in Path.items(self.simple, all=True)]
-        self.assertEqual(len(paths), 16)
-
         simple = deepcopy(self.simple)
         new = {}
         for path, value in Path.items(simple, all=True):
@@ -625,7 +651,7 @@ class TestLogicPath(TestBase):
             self.assertEqual(set(path.get_in(obj).keys()), expected)
 
 
-    def test_simple_indexes(self):
+    def test_simple_indices(self):
         obj = tuple(range(3))
         wildkey_expected = {"*": {0,1,2},
                             ":": {0,1,2},
@@ -645,6 +671,97 @@ class TestLogicPath(TestBase):
         for wildkey, expected in wildkey_expected.items():
             path = WildPath(wildkey)
             self.assertEqual(set(path.get_in(obj)), expected)
+
+
+class TestVarious(unittest.TestCase):
+
+    def test_orring_negative_indices(self):
+        obj = dict(key=[[0,1],[2,3],[4,5],[6,7]])
+        path = WildPath("key.0|-1.0")
+        self.assertEqual(path.get_in(obj), [0, 6])
+
+
+    def test_default(self):
+        obj = [
+            dict(a=[0, 1, 2], b="b1"),
+            dict(a=[3, 4, 5], b="b2", c="c"),
+        ]
+        self.assertEqual(Path("0.c").get_in(obj, "default"), "default")
+        self.assertEqual(WildPath("*.c").get_in(obj, "default"), ["default", "c"])
+
+    def test_property(self):
+        class Some(object):
+            def __init__(self):
+                self._prop = "prop"
+
+            @property
+            def prop(self):
+                return self._prop
+
+            @prop.setter
+            def prop(self, string):
+                self._prop = string
+
+            @prop.deleter
+            def prop(self):
+                del self._prop
+
+        some = Some()
+
+        self.assertEqual(Path("prop").get_in(some), "prop")
+        self.assertEqual(WildPath("prop").get_in(some), "prop")
+        self.assertEqual(WildPath("!_*").get_in(some), {'prop': 'prop'})
+        self.assertEqual(dict(Path.items(some)), {('prop',): 'prop', ('_prop',): 'prop'})
+        Path("prop").set_in(some, "drop")
+        self.assertEqual(Path("prop").get_in(some), "drop")
+        Path("prop").del_in(some)
+        self.assertFalse(Path("prop").has_in(some))
+
+    def test_descriptor(self):
+        class TestDescriptor(object):
+            def __get__(self, obj, cls):
+                if obj is None:
+                    return cls
+                return obj.attr
+
+            def __set__(self, obj, value):
+                obj.attr = value
+
+            def __delete__(self, obj):
+                del obj.attr
+
+        class Test(object):
+            desc = TestDescriptor()
+
+            def __init__(self, desc):
+                self.desc = desc
+
+        test = Test("attribute")
+
+        self.assertEqual(Path("desc").get_in(test), 'attribute')
+        self.assertEqual(WildPath("*").get_in(test), {'attr': 'attribute',
+                                                      'desc': 'attribute'})
+        Path("desc").set_in(test, "betribute")
+        self.assertEqual(Path("desc").get_in(test), 'betribute')
+        WildPath("*").set_in(test, "cetribute")  # sets both
+        self.assertEqual(Path("desc").get_in(test), 'cetribute')
+
+        Path("desc").del_in(test)
+        self.assertEqual(Path("desc").has_in(test), False)
+
+    def test_class_items(self):
+        class Test(object):
+            dont_find_1 = 1
+
+            @classmethod
+            def dont_find_2(cls):
+                pass
+
+            @staticmethod
+            def dont_find_3(cls):
+                pass
+
+        self.assertEqual(list(Path.items(Test())), [])
 
 
 class TestDocs(TestBase):
@@ -763,7 +880,3 @@ class TestDocs(TestBase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-
-
